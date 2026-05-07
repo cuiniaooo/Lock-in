@@ -1,9 +1,7 @@
-
 from pyrpl import Pyrpl
 
 p = Pyrpl("lockin_config", hostname="rp-f0eb1d.local", gui=False)
 r = p.rp
-
 
 # IQ demodulator
 iq = r.iq0
