@@ -1,0 +1,92 @@
+PyRPL IQ Lock-in Demodulation Pipeline
+=======================================
+
+                                 ┌─────────────────────────────────┐
+                                 │    Internal LO (NCO)            │
+                                 │    f_LO  = iq.frequency         │
+                                 │    A_LO  = iq.amplitude         │
+                                 │    φ     = iq.phase             │
+                                 │                                 │
+                                 │    sin(2π f_LO·t + φ)  ──┐      │
+                                 │    cos(2π f_LO·t + φ)  ──│──┐   │
+                                 └────────────────────────────┼──┼─┘
+                                                              │  │
+                                                              ▼  ▼
+   in1                   ┌──────────────┐         ┌────────┐  ┌────────┐         ┌────────────────┐         ┌──────────────────┐
+  ──────►  [Red Pitaya]──┤ HPF          │────┬───►│   ✕    │  │   ✕    │────┬───►│ LPF / BPF      │────┬───►│  Quadrature out  │
+   ADC      ±1V (LV)     │ acbandwidth  │    │    │ (mixer)│  │ (mixer)│    │    │ iq.bandwidth   │    │    │  output_signal=  │
+   125MS/s               │ (input HP)   │    │    └────────┘  └────────┘    │    │ [list of poles]│    │    │  'quadrature'    │
+                         └──────────────┘    │         │           │        │    │ +f = LPF pole  │    │    │                  │
+                                             │         │ "product" │        │    │ -f = HPF pole  │    │    │  scaled by:      │
+                                             │         │ port      │        │    │                │    │    │  iq.quadrature_  │
+                                             │         ▼           ▼        │    │ ── single pole │    │    │     factor       │
+                                             │      I-arm        Q-arm      │    │    20 dB/dec   │    │    └─────────┬────────┘
+                                             │                              │    │ ── N poles     │    │              │
+                                             │                              │    │    20·N dB/dec │    │              ▼
+                                             │                              │    └────────────────┘    │     out1/out2  (DAC ±1V)
+                                             │                              │                          │     iq.output_direct
+                                             │                              │                          │
+                                             │                              │                          └─► I, Q readouts
+                                             │                              │                              (software / scope module)
+                                             ▼                              ▼
+                                      raw "product"                 raw "product"
+                                      (pre-LPF)                     (pre-LPF)
+
+
+SIGNAL FLOW MATH
+================
+
+  Input:    s(t)  =  A_sig · sin(2π f_sig·t + φ_sig)
+
+  Mixer:    s(t) · sin(2π f_LO·t + φ)
+            = ½ A_sig A_LO [ cos((f_sig − f_LO)·2π·t + Δφ)
+                             − cos((f_sig + f_LO)·2π·t + Σφ) ]
+                   ↑                                 ↑
+              difference / envelope            sum (≈ 2 f_LO when matched)
+              (slow — KEEP)                    (fast — REJECT via LPF)
+
+  After LPF (cutoff f_LPF, with  f_sig − f_LO  ≪  f_LPF  ≪  2·f_LO ):
+
+      I  =  ½ A_sig A_LO · cos(Δφ)        ← in-phase
+      Q  =  ½ A_sig A_LO · sin(Δφ)        ← quadrature
+      R  =  √(I² + Q²)  =  ½ A_sig A_LO   ← magnitude (phase-independent)
+
+
+BANDWIDTH CRITERIA
+==================
+
+  Lower bound:    f_LPF  ≫  highest envelope/beat frequency you want to capture
+  Upper bound:    f_LPF  ≪  2·f_LO   (and any other unwanted mixing products)
+  Settling time:  τ ≈ 1 / (2π f_LPF)     → narrower BW = slower response
+
+  Rejection at 2·f_LO with N single poles at f_LPF:
+      attenuation ≈ 20·N · log10(2·f_LO / f_LPF)  dB
+      e.g. N=1, f_LPF=1 kHz, f_LO=10 MHz  →  ~86 dB
+           N=2, same                       →  ~172 dB
+
+
+KEY PARAMETERS (iq.setup arguments)
+===================================
+
+  frequency          LO frequency f_LO
+  amplitude          LO amplitude A_LO (also drives output_direct if routed)
+  phase              LO phase φ (sweep this for I/Q split test)
+  acbandwidth        input HPF cutoff (kills DC drift before mixing)
+  bandwidth          post-mixer filter: list of poles
+                       +f  = LPF pole at f Hz
+                       −f  = HPF pole at f Hz
+                       e.g. [1e3, 1e3]    → two-pole LPF
+                            [-10, 1e3]    → bandpass (HPF 10, LPF 1k)
+  gain               post-mix gain on the IQ control loop path
+  quadrature_factor  multiplier on quadrature output (watch for DAC clipping!)
+  input              signal source ('in1', 'in2', or another module)
+  output_direct      'off' / 'out1' / 'out2'  — physical DAC routing
+  output_signal      'quadrature' (I) / 'output_direct' (LO) / 'pfd' / etc.
+
+
+HARDWARE LIMITS (Red Pitaya)
+============================
+
+  ADC inputs (in1, in2):   ±1 V  (LV jumper, default)   /   ±20 V (HV jumper)
+  DAC outputs (out1, out2): ±1 V  hardware-clamped — no headroom beyond
+  Sample rate:              125 MS/s  (Nyquist 62.5 MHz)
